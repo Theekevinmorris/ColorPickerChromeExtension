@@ -12,12 +12,17 @@
     }
   },
   "permissions": [
-    "activeTab"
+    "activeTab",
+    "storage"
   ],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["scripts/contentScript.js"]
     }
-  ]
+  ],
+  "web_accessible_resources": [{
+    "resources": ["libs/html2canvas.min.js"],
+    "matches": ["<all_urls>"]
+  }]
 } 
