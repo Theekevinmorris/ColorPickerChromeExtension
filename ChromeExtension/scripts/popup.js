@@ -1,34 +1,94 @@
-// This file will contain any JavaScript functionality for the popup
 document.addEventListener('DOMContentLoaded', () => {
     const startPickerButton = document.getElementById('startPicker');
     const colorHexInput = document.getElementById('colorHex');
+    let isPickerActive = false;
 
-    // Load any previously picked color
-    chrome.storage.local.get(['pickedColor'], (result) => {
+    // Add stop button
+    const stopButton = document.createElement('button');
+    stopButton.id = 'stopPicker';
+    stopButton.textContent = 'Stop Picking';
+    stopButton.style.display = 'none';
+    startPickerButton.parentNode.insertBefore(stopButton, startPickerButton.nextSibling);
+
+    chrome.storage.local.get(['pickedColor', 'isPickerActive'], (result) => {
         if (result.pickedColor) {
             colorHexInput.value = result.pickedColor;
-            // Also update the input's background color to show the color
             colorHexInput.style.backgroundColor = result.pickedColor;
             colorHexInput.style.color = getContrastColor(result.pickedColor);
         }
+        // Restore picker state
+        if (result.isPickerActive) {
+            togglePickerState(true);
+        }
     });
 
+    function togglePickerState(active) {
+        console.log('Toggling picker state:', active);
+        isPickerActive = active;
+        startPickerButton.style.display = active ? 'none' : 'block';
+        stopButton.style.display = active ? 'block' : 'none';
+        chrome.storage.local.set({ isPickerActive: active });
+    }
+
+    async function injectContentScriptIfNeeded(tab) {
+        try {
+            console.log('Checking if content script is loaded...');
+            // Try sending a test message to check if content script is loaded
+            await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
+            console.log('Content script is already loaded');
+        } catch (error) {
+            console.log('Content script not loaded, injecting...');
+            // If content script isn't loaded, inject it
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['scripts/contentScript.js']
+            });
+            // Inject html2canvas separately to ensure proper loading order
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['libs/html2canvas.min.js']
+            });
+            console.log('Content script injection complete');
+        }
+    }
+
     startPickerButton.addEventListener('click', async () => {
-        // Get the current active tab
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        
-        // Send message to content script to start picking
-        chrome.tabs.sendMessage(tab.id, { action: 'startPicking' });
-        
-        // Close the popup to allow for picking
-        window.close();
+        try {
+            console.log('Start button clicked');
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            console.log('Current tab:', tab.url);
+            
+            // Make sure we can inject into this tab
+            if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://')) {
+                await injectContentScriptIfNeeded(tab);
+                console.log('Sending startPicking message');
+                await chrome.tabs.sendMessage(tab.id, { action: 'startPicking' });
+                togglePickerState(true);
+            } else {
+                console.error('Cannot access this page due to browser restrictions');
+            }
+        } catch (error) {
+            console.error('Error starting picker:', error);
+        }
+    });
+
+    stopButton.addEventListener('click', async () => {
+        try {
+            console.log('Stop button clicked');
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            await chrome.tabs.sendMessage(tab.id, { action: 'stopPicking' });
+            togglePickerState(false);
+        } catch (error) {
+            console.error('Error stopping picker:', error);
+            togglePickerState(false);
+        }
     });
 
     // Listen for color picked message
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        console.log('Received message:', request);
         if (request.action === 'colorPicked') {
             colorHexInput.value = request.color;
-            // Update the input's background color
             colorHexInput.style.backgroundColor = request.color;
             colorHexInput.style.color = getContrastColor(request.color);
         }
