@@ -1,46 +1,7 @@
 let isPickerActive = false;
 
-async function injectHtml2Canvas() {
-    return new Promise((resolve, reject) => {
-        if (window.html2canvas) {
-            resolve(window.html2canvas);
-            return;
-        }
-
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('libs/html2canvas.min.js');
-        script.onload = () => resolve(window.html2canvas);
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
-}
-
-function getPixelColor(x, y) {
-    // Create a canvas element
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    
-    // Set canvas size to 1x1 as we only need one pixel
-    canvas.width = 1;
-    canvas.height = 1;
-    
-    // Draw the area of the page at (x,y) into the canvas
+async function getPixelColor(x, y) {
     try {
-        context.drawWindow(window, x, y, 1, 1, 'rgb(255,255,255)');
-        // Get the pixel data
-        const pixelData = context.getImageData(0, 0, 1, 1).data;
-        return rgbToHex(`rgb(${pixelData[0]}, ${pixelData[1]}, ${pixelData[2]})`);
-    } catch (e) {
-        // Fallback to screenshot method if drawWindow is not supported
-        return fallbackGetPixelColor(x, y);
-    }
-}
-
-async function fallbackGetPixelColor(x, y) {
-    try {
-        // Ensure html2canvas is available
-        const html2canvas = await injectHtml2Canvas();
-        
         // Take a screenshot of the visible tab
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -58,12 +19,13 @@ async function fallbackGetPixelColor(x, y) {
         
         // Draw the current page to the canvas
         const renderedCanvas = await html2canvas(document.documentElement, {
-            canvas: canvas,
+            useCORS: true,
+            scale: dpr,
             x: window.scrollX,
             y: window.scrollY,
             width: rect.width,
             height: rect.height,
-            scale: dpr
+            backgroundColor: null
         });
         
         // Get the pixel color at the clicked position
@@ -140,7 +102,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             e.preventDefault();
             e.stopPropagation();
             
-            const color = await fallbackGetPixelColor(e.clientX, e.clientY);
+            const color = await getPixelColor(e.clientX, e.clientY);
             if (color) {
                 // Store the color in chrome.storage
                 chrome.storage.local.set({ pickedColor: color }, () => {
