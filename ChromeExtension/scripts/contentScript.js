@@ -1,46 +1,10 @@
+console.log('Content script loaded');
 let isPickerActive = false;
+let moveHandler, clickHandler, preventEvents;
 
-async function injectHtml2Canvas() {
-    return new Promise((resolve, reject) => {
-        if (window.html2canvas) {
-            resolve(window.html2canvas);
-            return;
-        }
-
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('libs/html2canvas.min.js');
-        script.onload = () => resolve(window.html2canvas);
-        script.onerror = reject;
-        document.head.appendChild(script);
-    });
-}
-
-function getPixelColor(x, y) {
-    // Create a canvas element
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    
-    // Set canvas size to 1x1 as we only need one pixel
-    canvas.width = 1;
-    canvas.height = 1;
-    
-    // Draw the area of the page at (x,y) into the canvas
+async function getPixelColor(x, y) {
     try {
-        context.drawWindow(window, x, y, 1, 1, 'rgb(255,255,255)');
-        // Get the pixel data
-        const pixelData = context.getImageData(0, 0, 1, 1).data;
-        return rgbToHex(`rgb(${pixelData[0]}, ${pixelData[1]}, ${pixelData[2]})`);
-    } catch (e) {
-        // Fallback to screenshot method if drawWindow is not supported
-        return fallbackGetPixelColor(x, y);
-    }
-}
-
-async function fallbackGetPixelColor(x, y) {
-    try {
-        // Ensure html2canvas is available
-        const html2canvas = await injectHtml2Canvas();
-        
+        console.log('Getting pixel color at', x, y);
         // Take a screenshot of the visible tab
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -57,18 +21,23 @@ async function fallbackGetPixelColor(x, y) {
         context.scale(dpr, dpr);
         
         // Draw the current page to the canvas
+        console.log('Creating screenshot with html2canvas...');
         const renderedCanvas = await html2canvas(document.documentElement, {
-            canvas: canvas,
+            useCORS: true,
+            scale: dpr,
             x: window.scrollX,
             y: window.scrollY,
             width: rect.width,
             height: rect.height,
-            scale: dpr
+            backgroundColor: null,
+            logging: true
         });
         
         // Get the pixel color at the clicked position
         const pixelData = renderedCanvas.getContext('2d').getImageData(x * dpr, y * dpr, 1, 1).data;
-        return rgbToHex(`rgb(${pixelData[0]}, ${pixelData[1]}, ${pixelData[2]})`);
+        const color = rgbToHex(`rgb(${pixelData[0]}, ${pixelData[1]}, ${pixelData[2]})`);
+        console.log('Got color:', color);
+        return color;
     } catch (e) {
         console.error('Error getting pixel color:', e);
         return null;
@@ -105,11 +74,35 @@ overlay.style.cssText = `
 `;
 document.body.appendChild(overlay);
 
+function cleanup() {
+    console.log('Cleaning up picker');
+    isPickerActive = false;
+    overlay.style.display = 'none';
+    if (moveHandler) document.removeEventListener('mousemove', moveHandler, { capture: true });
+    if (preventEvents) {
+        const events = ['click', 'mousedown', 'mouseup', 'mousemove', 'touchstart', 'touchend', 'touchmove', 'contextmenu'];
+        events.forEach(eventType => {
+            document.removeEventListener(eventType, preventEvents, { capture: true });
+        });
+    }
+    if (clickHandler) document.removeEventListener('click', clickHandler, { capture: true });
+    document.body.style.cursor = 'default';
+}
+
+// Ensure cleanup on page unload
+window.addEventListener('unload', cleanup);
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'startPicking') {
+    console.log('Received message:', request);
+    if (request.action === 'ping') {
+        console.log('Ping received, sending response');
+        sendResponse({ status: 'ok' });
+        return true;
+    } else if (request.action === 'startPicking' && !isPickerActive) {
+        console.log('Starting picker');
         isPickerActive = true;
         
-        const preventEvents = (e) => {
+        preventEvents = (e) => {
             if (isPickerActive) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -124,7 +117,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         
         // Show and update overlay position
-        const moveHandler = (e) => {
+        moveHandler = (e) => {
             if (!isPickerActive) return;
             
             overlay.style.display = 'block';
@@ -134,14 +127,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         document.addEventListener('mousemove', moveHandler, { capture: true });
         
-        const clickHandler = async (e) => {
+        clickHandler = async (e) => {
             if (!isPickerActive) return;
             
+            console.log('Click detected at', e.clientX, e.clientY);
             e.preventDefault();
             e.stopPropagation();
             
-            const color = await fallbackGetPixelColor(e.clientX, e.clientY);
+            const color = await getPixelColor(e.clientX, e.clientY);
             if (color) {
+                console.log('Sending picked color:', color);
                 // Store the color in chrome.storage
                 chrome.storage.local.set({ pickedColor: color }, () => {
                     // Then send the message
@@ -149,22 +144,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 });
             }
             
-            // Clean up
-            isPickerActive = false;
-            overlay.style.display = 'none';
-            document.removeEventListener('mousemove', moveHandler, { capture: true });
-            events.forEach(eventType => {
-                document.removeEventListener(eventType, preventEvents, { capture: true });
-            });
-            document.removeEventListener('click', clickHandler, { capture: true });
-            document.body.style.cursor = 'default';
-            
             return false;
         };
         
         document.addEventListener('click', clickHandler, { capture: true });
         document.body.style.cursor = 'crosshair';
         
+        console.log('Picker started');
         sendResponse({ status: 'success' });
+        return true;
+    } else if (request.action === 'stopPicking') {
+        console.log('Stopping picker');
+        cleanup();
+        sendResponse({ status: 'success' });
+        return true;
     }
 }); 
