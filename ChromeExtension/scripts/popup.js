@@ -39,14 +39,17 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.log('Content script not loaded, injecting...');
             // If content script isn't loaded, inject it
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ['scripts/contentScript.js']
-            });
-            // Inject html2canvas separately to ensure proper loading order
+            // Inject html2canvas before the content script so it's available
+            // as soon as the script executes. Executing in the opposite order
+            // could lead to `html2canvas` being undefined if the user triggers
+            // the picker before the second injection completes.
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 files: ['libs/html2canvas.min.js']
+            });
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['scripts/contentScript.js']
             });
             console.log('Content script injection complete');
         }
